@@ -155,25 +155,25 @@ labels = np.load('C:/RCNN/labels.npy' )
 rect = np.load('C:/RCNN/rect.npy' )
 
 
-num = len(imgfile)
-num_train = round(0.90*len(num))
-train_idx = np.random.choice(np.arange(num), num_train, replace = False)
-valid_idx = np.setdiff1d(np.arange(num), train_idx)
+#num = len(imgfile)
+# num_train = round(0.90*num)
+# train_idx = np.random.choice(np.arange(num), num_train, replace = False)
+# valid_idx = np.setdiff1d(np.arange(num), train_idx)
 
 
 #%% 주변 맥락을 고려해주는 함수와 selective search 의 결과를 RCNN input 에 맞게 출력하는 batch 함수 
 
 
-def RCNN_batch(imgfile, rect, labels, idx, pos_neg_number, obj_class):
+def RCNN_batch(imgfile, rect, labels, pos_neg_number, idx, obj_class):
     
+    imgfile = imgfile[idx]
+    rect = rect[idx]
+    labels = labels[idx]
+
     train_images=[]
     train_labels=[]
     pos_lag = 0
     neg_lag = 0
-
-    imgfile = imgfile[idx]
-    rect = rect[idx]
-    labels = labels[idx]
 
     img_path = 'JPEGImages'
 
@@ -224,19 +224,27 @@ model_final.summary()
 
 #%%
 from sklearn.preprocessing import LabelBinarizer
-batch_train = RCNN_batch(imgfile, rect,labels,train_idx, (32,96), obj_class)
-batch_val = RCNN_batch(imgfile, rect,labels,valid_idx, (8,24), obj_class)
+batch_train = RCNN_batch(imgfile, rect,labels,np.arange(len(imgfile)), (32,96), obj_class)
 
-from keras.callbacks import ModelCheckpoint, EarlyStopping
-checkpoint = ModelCheckpoint("ieeercnn_vgg16_1.h5", monitor='val_loss', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
-early = EarlyStopping(monitor='val_loss', min_delta=0, patience=100, verbose=1, mode='auto')
-hist = model_final.fit(batch_train, epochs= 200, steps_per_epoch= 10, validation_data = batch_val,  callbacks=[checkpoint,early])
+hist = model_final.fit(batch_train, epochs= 200, steps_per_epoch= 10)
+
+
+
+# batch_train = RCNN_batch(imgfile, rect,labels,train_idx, (32,96), obj_class)
+# batch_val = RCNN_batch(imgfile, rect,labels,valid_idx, (8,24), obj_class)
+# 
+# from keras.callbacks import ModelCheckpoint, EarlyStopping
+# checkpoint = ModelCheckpoint("ieeercnn_vgg16_1.h5", monitor='val_loss', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
+# early = EarlyStopping(monitor='val_loss', min_delta=0, patience=100, verbose=1, mode='auto')
+# hist = model_final.fit(batch_train, epochs= 200, steps_per_epoch= 10, validation_data = batch_val,  callbacks=[checkpoint,early])
 
 model_final.save('C:/RCNN/my_model.h5')
 
+## 빠른 구현을 위해 validation 생략 validation을 하고싶다면 RCNN_batch 함수에 idx 를 부여해주면됨.
+
 #%%
-# loaded_model = tf.keras.models.load_model('C:/RCNN/my_model.h5')
-loaded_model = tf.keras.models.load_model('C:/RCNN/ieeercnn_vgg16_1.h5')
+loaded_model = tf.keras.models.load_model('C:/RCNN/my_model.h5')
+# loaded_model = tf.keras.models.load_model('C:/RCNN/ieeercnn_vgg16_1.h5') 
 loaded_model.summary()
 
 from keras import Model
@@ -250,17 +258,20 @@ reconstructed_model.summary()
 #%%
 from sklearn.linear_model import SGDClassifier
 
-hard_neg_sample_idx = iou[ iou ==1 |iou<=0.3]
+hard_neg_sample_idx = np.arange(len(iou))[np.bitwise_or(iou == 1, iou<0.3)]
 
-svm_batch = RCNN_batch(imgfile, rect,labels,hard_neg_sample_idx, (32,96), obj_class)
+svm_batch = RCNN_batch(imgfile, rect,labels, (32,96),hard_neg_sample_idx,obj_class)
 
 obj_class_np = np.array(obj_class)
+label_operater = LabelBinarizer()
+label_operater.fit(obj_class_np)
 
 sgdc = SGDClassifier(loss= 'log')
 
-for images, labels in svm_batch:
-    X_partial = reconstructed_model.predict(images)
-    sgdc.partial_fit(X_partial, labels, classes = obj_class_np)
+for x1, x2 in svm_batch:
+    X_partial = reconstructed_model.predict(x1)
+    inverse_label = label_operater.inverse_transform(x2)
+    sgdc.partial_fit(X_partial, inverse_label, classes = obj_class_np)
 # 데이터를 한번에 load 하면 메모리가 터짐/ batch sample로 SVM을 적용하기위해 SGDClassifier 사용
 # parameter 조정은 생략하겠습니다. 
 # default 가 linear SVM 이고 OvR
