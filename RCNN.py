@@ -17,15 +17,13 @@ from sklearn.linear_model import Ridge
 from utils import *
 
 #%%
-dataset_path = "C:/VOCdevkit/VOC2007/"
+dataset_path = "C:/RCNN/VOCdevkit/VOC2007/"
 
 os.chdir(dataset_path)
 
 img_path = "JPEGImages"
 annot_path = "Annotations"
 
-image = cv2.imread(os.path.join(img_path, os.listdir(img_path)[0]))
-image.shape
 #%%
 
 
@@ -128,17 +126,6 @@ np.save('C:/RCNN/labels', labels)
 np.save('C:/RCNN/iou', iou) 
 
 
-#%% pretrain 된 VGG16을 가져와서 VOC도메인에 맞게 조정한다.
-vggmodel = VGG16(weights='imagenet', include_top=True)
-vggmodel.summary()
-
-X= vggmodel.layers[-2].output
-predictions = Dense(21, activation="softmax")(X)
-model_final = Model(inputs = vggmodel.input, outputs = predictions)
-
-opt = optimizers.SGD(lr=0.001)
-model_final.compile(loss = tf.keras.losses.categorical_crossentropy, optimizer = opt, metrics=["accuracy"])
-model_final.summary()
 
 #%%
 # obj_class =[]
@@ -222,6 +209,20 @@ def RCNN_batch(imgfile, rect, labels, idx, pos_neg_number, obj_class):
 
 ##%
 
+
+#%% pretrain 된 VGG16을 가져와서 VOC도메인에 맞게 조정한다.
+vggmodel = VGG16(weights='imagenet', include_top=True)
+vggmodel.summary()
+
+X= vggmodel.layers[-2].output
+predictions = Dense(21, activation="softmax")(X)
+model_final = Model(inputs = vggmodel.input, outputs = predictions)
+
+opt = optimizers.SGD(lr=0.001)
+model_final.compile(loss = tf.keras.losses.categorical_crossentropy, optimizer = opt, metrics=["accuracy"])
+model_final.summary()
+
+#%%
 from sklearn.preprocessing import LabelBinarizer
 batch_train = RCNN_batch(imgfile, rect,labels,train_idx, (32,96), obj_class)
 batch_val = RCNN_batch(imgfile, rect,labels,valid_idx, (8,24), obj_class)
