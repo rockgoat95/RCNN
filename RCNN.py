@@ -1,4 +1,7 @@
 #%%
+
+### 코드에 서툴러서 여러개의 list를 분산하여 관리하였는데 
+### dictionary 를 이용하거나 list를 하나로 통합해서 관리하면 더 좋을 것으로 보입니다.
 import os
 import cv2
 import matplotlib.pyplot as plt
@@ -45,6 +48,14 @@ plt.imshow(imOut)
 
 
 def VOCdataset_with_ss(VOC_path):
+    '''
+        input: VOC_path ( VOCdevkit/VOC2007/)
+        
+        VOC dataset을 selective search한 결과를 출력하는 함수
+        output 은 이미지 파일이름, selective search 결과 좌표, label , iou 들의 리스트들.
+
+        이런식으로 결과를 편집한 이유는 이미지를 직접 저장하여 사용하면 메모리를 과도하게 많이 사용하기 때문.
+    '''
     
     os.chdir(dataset_path)
 
@@ -117,6 +128,7 @@ def VOCdataset_with_ss(VOC_path):
 
 
 
+
 #%%
 imgfile, rect, labels, iou= VOCdataset_with_ss(dataset_path)
 
@@ -165,10 +177,28 @@ rect = np.load('C:/RCNN/rect.npy' )
 
 
 def RCNN_batch(imgfile, rect, labels, pos_neg_number, idx, obj_class):
+    '''
+        RCNN 을 위한 batch 함수
+
+        imgfile : numpy list of image file name
+        rect :  numpy list of results of selective search of imgfile
+        labels : numpy list of labels of rect in imgfile
+        pos_neg_number: list of numbers of postive and negative samples
+        idx : numpy list of index set for batch
+        obj_class : list of object class
+
+        output: batch samples and labels 
+    '''
     
-    imgfile = imgfile[idx]
-    rect = rect[idx]
-    labels = labels[idx]
+    reindexed_imgfile = imgfile[idx]
+    reindexed_rect = rect[idx]
+    reindexed_labels = labels[idx]
+
+    idx = np.random.choice(idx, len(reindexed_imgfile),replace = False )
+
+    reindexed_imgfile = imgfile[idx]
+    reindexed_rect = rect[idx]
+    reindexed_labels = labels[idx]
 
     train_images=[]
     train_labels=[]
@@ -180,22 +210,22 @@ def RCNN_batch(imgfile, rect, labels, pos_neg_number, idx, obj_class):
     Label_binarized = LabelBinarizer()
     Label_binarized.fit(obj_class)
 
-    for i,filename in enumerate(imgfile):
-        if (labels[i] != 'background' and pos_lag <pos_neg_number[0]) or (labels[i] == 'background' and neg_lag < pos_neg_number[1]):
+    for i,filename in enumerate(reindexed_imgfile):
+        if (reindexed_labels[i] != 'background' and pos_lag <pos_neg_number[0]) or (reindexed_labels[i] == 'background' and neg_lag < pos_neg_number[1]):
 
             image = cv2.imread(os.path.join(img_path,filename+'.jpg'))
-            x,y,w,h = rect[i]
+            x,y,w,h = reindexed_rect[i]
 
             cropped_arround_img= around_context(image, x,y,w,h,16)
             cropped_arround_img = np.array(cropped_arround_img, dtype = np.uint8)
             resized = cv2.resize(cropped_arround_img, (224,224), interpolation = cv2.INTER_AREA)
         
             train_images.append(resized)
-            train_labels.append(labels[i])
+            train_labels.append(reindexed_labels[i])
 
-            if labels[i] == 'background' :
+            if reindexed_labels[i] == 'background' :
                 neg_lag += 1
-            elif labels[i] != 'background' :
+            elif reindexed_labels[i] != 'background' :
                 pos_lag += 1
 
         if pos_lag >=pos_neg_number[0] and neg_lag>=pos_neg_number[1]:
@@ -206,7 +236,6 @@ def RCNN_batch(imgfile, rect, labels, pos_neg_number, idx, obj_class):
             train_labels = []
 
             yield (sample_train_images, sample_train_labels)
-
 ##%
 
 
@@ -224,7 +253,7 @@ model_final.summary()
 
 #%%
 from sklearn.preprocessing import LabelBinarizer
-batch_train = RCNN_batch(imgfile, rect,labels,np.arange(len(imgfile)), (32,96), obj_class)
+batch_train = RCNN_batch(imgfile, rect,labels, (32,96), np.arange(len(imgfile)),obj_class)
 
 hist = model_final.fit(batch_train, epochs= 200, steps_per_epoch= 10)
 
@@ -285,9 +314,22 @@ sgdc = pickle.load(open('C:/RCNN/SVM_for_RCNN.sav', 'rb'))
 
 
 #%%
+def data_for_bb_fun(imgfile, rect, iou, bb_nn):
+    '''
+        bounding box regression의 pool5 feature를 만들어주는 함수
+        imgfile : list of image file name
+        rect : results of selective search
+        bb_nn : CNN for pool5 feature
 
-def data_for_bb_fun(annot_path, img_path, neural_net):
-    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+        output:
+        lists of pool5 feature, proposal box, and ground truth box
+    '''
+    
+    idx = np.arange(len(iou))[iou>0.7]
+
+
+    imgfile = imgfile[idx]
+    rect= rect[idx]
 
     pool5_feature=[]
     proposal_box=[]
@@ -295,18 +337,22 @@ def data_for_bb_fun(annot_path, img_path, neural_net):
 
     
     lag = 0
+    img_path = 'JPEGImages'
+    annot_path = 'Annotations'
 
-
-    for e,i in enumerate(os.listdir(annot_path)):
-        filename = i.split(".")[0]+".jpg"
-        print(e,filename)
+    for i in range(len(imgfile)):
+        filename = imgfile[i]+".jpg"
         image = cv2.imread(os.path.join(img_path,filename))
-        xml =  open(os.path.join(annot_path, i), "r")
+        xml =  open(os.path.join(annot_path, imgfile[i]+".xml"), "r")
         tree = Et.parse(xml)
         root = tree.getroot()
         objects = root.findall("object")
         
         bb_values=[]
+
+        x,y,w,h = rect[i]
+
+        temp_iou = []
         for _object in objects:
             bndbox = _object.find('bndbox')
             xmin = int(bndbox.find('xmin').text)
@@ -314,43 +360,23 @@ def data_for_bb_fun(annot_path, img_path, neural_net):
             ymin = int(bndbox.find('ymin').text)
             ymax = int(bndbox.find('ymax').text)
             bb_values.append({"xmin":xmin,"xmax":xmax,"ymin":ymin,"ymax":ymax})
+        
+        iou_list = np.array([get_iou(bb_val,{"xmin":x,"xmax":x+w,"ymin":y,"ymax":y+h} ) for bb_val in bb_values])
+        best_iou_idx = iou_list.argmax()
+        temp = bb_values[best_iou_idx]
 
-        ss.setBaseImage(image)
-        ss.switchToSelectiveSearchFast()
-        ssresults = ss.process()
 
-        pool5_feature_lag=[]
-        proposal_box_lag=[]
-        gt_box_lag =[]
-        for e2,result in enumerate(ssresults):
-            x,y,w,h = result
-            iou_list = np.array([get_iou(bb_val,{"xmin":x,"xmax":x+w,"ymin":y,"ymax":y+h} ) for bb_val in bb_values])
-            best_iou_idx = iou_list.argmax()
-            temp = bb_values[best_iou_idx]
-            
-            if iou_list[best_iou_idx] >=0.70 and lag < 10:
-                cropped_arround_img= around_context(image, x,y,w,h,16)
-                cropped_arround_img = np.array(cropped_arround_img, dtype = np.uint8)
-                resized = cv2.resize(cropped_arround_img, (224,224), interpolation = cv2.INTER_AREA) 
+        gt_box.append([(temp['xmin']+temp['xmax'])/2,(temp['ymin']+temp['ymax'])/2,temp['xmax']-temp['xmin'] , temp['ymax'] - temp['ymin']])
 
-                resized = np.expand_dims(resized, axis = 0)
-                pool5_feature_lag.append(neural_net.predict(resized)[0])
-                proposal_box_lag.append([x+w/2,y+h/2,w,h])
-                gt_box_lag.append([(temp['xmin']+temp['xmax'])/2,(temp['ymin']+temp['ymax'])/2,temp['xmax']-temp['xmin'] , temp['ymax'] - temp['ymin']])
-                lag += 1
-            else: 
-                continue
-                
-            if lag>=10:
-                lag = 0 
+        cropped_arround_img= around_context(image, x,y,w,h,16)
+        cropped_arround_img = np.array(cropped_arround_img, dtype = np.uint8)
+        resized = cv2.resize(cropped_arround_img, (224,224), interpolation = cv2.INTER_AREA) 
+        resized = np.expand_dims(resized, axis = 0)
 
-                pool5_feature = pool5_feature + pool5_feature_lag
-                proposal_box= proposal_box + proposal_box_lag
-                gt_box= gt_box + gt_box_lag
-                
-                break
+        pool5_feature.append(bb_nn.predict(resized)[0])
+        proposal_box.append([x + w/2,y+h/2,w , h])
+
     return pool5_feature, proposal_box , gt_box
-
 #%%
 
 bb_nn = Model(inputs = loaded_model.input, outputs = loaded_model.layers[-4].output)
@@ -374,6 +400,17 @@ gt_box = np.load('C:/RCNN/gt_box.npy')
 
 
 def bounding_box_regression(proposal, ground_truth ,neural_feature, alpha):
+    '''
+        바운딩박스 리그레션을 하는 함수
+        proposal : result of selective search 
+        
+        neural_feature: pool5 feature 
+
+        alpha: regularized constant ( 1000 in  this model)
+
+
+        output: coefficients of bounding box regression
+    '''
     
     t_star = np.zeros(ground_truth.shape)
 
@@ -400,6 +437,14 @@ np.save('C:/RCNN/bb_wt', bb_wt)
 #%%
 
 def adjusted_box(proposal, weight , neural_feature ):
+    '''
+        bounding box regression 결과를 통해 box를 재조정시켜주는 함수
+        proposal : result of selective search 
+        weight : coefficient of bounding box regression
+        neural_feature: pool5 feature 
+
+        output: modified bounding box using bb reg
+    '''
     d_star = weight.dot(neural_feature.T)
 
     pred_x = proposal[2]*d_star[0] + proposal[0]
@@ -412,6 +457,16 @@ def adjusted_box(proposal, weight , neural_feature ):
 bb_wt = np.load('C:/RCNN/bb_wt.npy')
 #%%
 def test_time_dectection(image, nn, bb_nn, svm, weight):
+    '''
+        결과를 실제 적용하는 함수
+
+        nn : cnn for Object detection 
+        bb_nn: cnn for pool5 feature ( subset network of nn)
+        svm : SVMs learned using hard negative mining
+        weight : coefficient of bounding box regression
+
+        output: image with predicted bounding box and label
+    '''
     ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
     ss.setBaseImage(image)
     ss.switchToSelectiveSearchFast()
@@ -428,12 +483,8 @@ def test_time_dectection(image, nn, bb_nn, svm, weight):
             resized = cv2.resize(cropped_arround_img, (224,224), interpolation = cv2.INTER_AREA)
             img = np.expand_dims(resized, axis=0)
 
-            ### NMS 이후 처리하는 걸로 바꿉시더 
-            pool5_feature = bb_nn.predict(img)
-            x_new, y_new , w_new, h_new = adjusted_box([x+w/2,y+h/2,w,h ], weight, pool5_feature[0])
-
             pred_score.append(svm.predict_proba(nn.predict(img))[0])
-            box.append({'xmin':round(x_new -w_new/2),'ymin':round(y_new - h_new/2),'xmax':round(x_new + w_new/2),'ymax':round(y_new + h_new/2)})
+            box.append({'xmin':x,'ymin':y,'xmax':x+w,'ymax':y+h})
    
     obj_class = svm.classes_
 
@@ -443,9 +494,20 @@ def test_time_dectection(image, nn, bb_nn, svm, weight):
     NMS_idx = non_max_suppression(box,pred_score,overlapThresh = 0.1, class_list = obj_class)
     pred_score_max = list(map(lambda x: max(x), pred_score))
 
+
+
     for k in NMS_idx:
-        image_rec = cv2.rectangle(imout,(box[k]['xmin'],box[k]['ymin']),(box[k]['xmax'],box[k]['ymax']),(255,0,0), 2)
-        cv2.putText(image_rec, predict[k] + ":" + pred_score_max[k].round(2).astype(str),(box[k]['xmin'],box[k]['ymin']-10), cv2.FONT_HERSHEY_SIMPLEX,0.9,(255,0,0),2)
+        x, y, w, h =ssresults[k]
+        timage = imout[y:y+h,x:x+w]
+        cropped_arround_img= around_context(imout, x,y,w,h,16)
+        cropped_arround_img = np.array(cropped_arround_img, dtype = np.uint8)
+        resized = cv2.resize(cropped_arround_img, (224,224), interpolation = cv2.INTER_AREA)
+        img = np.expand_dims(resized, axis=0)
+        pool5_feature = bb_nn.predict(img)
+        x_new, y_new , w_new, h_new = adjusted_box([x+w/2,y+h/2,w,h ], weight, pool5_feature[0])
+
+        image_rec = cv2.rectangle(imout,(int(x_new -w_new/2) ,int(y_new -h_new/2)),(int(x_new +w_new/2) ,int(y_new +h_new/2)),(255,0,0), 2)
+        cv2.putText(image_rec, predict[k] + ":" + pred_score_max[k].round(2).astype(str),(int(box[k]['xmin']/2+box[k]['xmax']/2),int(box[k]['ymin']/2 + box[k]['ymax']/2) ), cv2.FONT_HERSHEY_SIMPLEX,0.9,(255,0,0),2)
 
     plt.imshow(imout)
     plt.show()
